@@ -18,16 +18,26 @@ SPREADSHEET_ID = "1JhRbD0lKigbScd7BaNyMZXJIcG2_QhvQSs1YLCT4VwM"
 
 # Localiza automaticamente o arquivo .json de credenciais na pasta
 @st.cache_resource
+# Conecta ao Google Sheets (funciona tanto no PC quanto na Nuvem)
+@st.cache_resource
 def conectar_google():
-    arquivos_json = [f for f in os.listdir('.') if f.endswith('.json')]
-    if not arquivos_json:
-        raise FileNotFoundError("Nenhum arquivo .json de credenciais foi encontrado na pasta do projeto.")
+    # 1. Se estiver rodando no Streamlit Cloud (via Secrets)
+    if "gcp_service_account" in st.secrets:
+        gc = gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
+        return gc.open_by_key(SPREADSHEET_ID)
     
-    # Usa o arquivo json encontrado
-    caminho_credencial = arquivos_json[0]
-    gc = gspread.service_account(filename=caminho_credencial)
-    sh = gc.open_by_key(SPREADSHEET_ID)
-    return sh
+    # 2. Se estiver rodando localmente no seu computador (via arquivo .json)
+    locais = [".", ".streamlit"]
+    arquivos_json = []
+    for local in locais:
+        if os.path.exists(local):
+            arquivos_json.extend([os.path.join(local, f) for f in os.listdir(local) if f.endswith(".json")])
+    
+    if arquivos_json:
+        gc = gspread.service_account(filename=arquivos_json[0])
+        return gc.open_by_key(SPREADSHEET_ID)
+        
+    raise FileNotFoundError("Nenhuma credencial encontrada.")
 
 try:
     planilha = conectar_google()
