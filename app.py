@@ -1,20 +1,33 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
-import gspread
 import os
-import io
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # Configuracao da pagina (sem emojis)
 st.set_page_config(
-    page_title="Controle de Estoque - Uniformes",
+    page_title="Sistema de Gestao Integrada",
     layout="wide"
 )
 
-# Estilo Personalizado: Tons escuros coordenados com Laranja e Branco
+# Caminho do arquivo Excel no OneDrive
+CAMINHO_EXCEL = "Controle_Estoque_Uniformes.xlsx"
+
+# Configuracoes de Envio de Email (Outlook / Microsoft 365)
+EMAIL_CONFIG = {
+    "ativar_alertas": True,
+    "servidor_smtp": "smtp.office365.com",
+    "porta_smtp": 587,
+    "remetente": "seu_email@defendi.com.br",
+    "senha_app": "sua_senha_de_aplicativo",
+    "destinatario": "seu_email@defendi.com.br"
+}
+
+# Estilo visual corporativo (Azul escuro, Laranja e Branco)
 st.markdown("""
 <style>
-    /* Cabecalho Institucional */
     .header-bar {
         background-color: #0F1E32;
         padding: 22px 28px;
@@ -36,8 +49,6 @@ st.markdown("""
         margin-top: 4px;
         font-weight: 400;
     }
-
-    /* Cartoes de Saldo/Indicadores (Tom escuro destacado) */
     .kpi-card {
         background-color: #172A45;
         border: 1px solid #243E63;
@@ -72,8 +83,6 @@ st.markdown("""
         color: #FF7A00;
         font-weight: 700;
     }
-
-    /* Container do Formulario */
     [data-testid="stForm"] {
         background-color: #172A45 !important;
         border: 1px solid #243E63 !important;
@@ -81,8 +90,6 @@ st.markdown("""
         padding: 24px !important;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2) !important;
     }
-
-    /* Garante que todos os rotulos e textos fiquem visiveis em branco */
     [data-testid="stForm"] label, 
     [data-testid="stForm"] p, 
     [data-testid="stWidgetLabel"] p,
@@ -91,8 +98,6 @@ st.markdown("""
         font-weight: 600 !important;
         font-size: 14px !important;
     }
-
-    /* Campos de Entrada e Selecao */
     div[data-baseweb="input"] {
         background-color: #0F1E32 !important;
         border: 1px solid #243E63 !important;
@@ -107,14 +112,10 @@ st.markdown("""
         border: 1px solid #243E63 !important;
         border-radius: 6px !important;
     }
-
-    /* Titulos das secoes */
     h3 {
         color: #FFFFFF !important;
         font-weight: 600 !important;
     }
-
-    /* Botoes com destaque Laranja e Azul */
     div.stButton > button {
         background-color: #E65100 !important;
         color: #FFFFFF !important;
@@ -146,177 +147,379 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Cabecalho da Aplicacao
-st.markdown("""
-<div class="header-bar">
-    <div class="header-title">SISTEMA DE CONTROLE DE ESTOQUE</div>
-    <div class="header-subtitle">Gestão Integrada de Uniformes e Equipamentos de Proteção</div>
-</div>
-""", unsafe_allow_html=True)
-
-# ID da Planilha no Google Sheets
-SPREADSHEET_ID = "1JhRbD0lKigbScd7BaNyMZXJIcG2_QhvQSs1YLCT4VwM"
-
-# Conexao com Google Sheets
-@st.cache_resource
-def conectar_google():
-    if "gcp_service_account" in st.secrets:
-        gc = gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
-        return gc.open_by_key(SPREADSHEET_ID)
+# Funcao de envio de e-mail via Outlook
+def disparar_email_reposicao(item, tamanho, saldo_final, minimo_configurado):
+    if not EMAIL_CONFIG["ativar_alertas"]:
+        return False, "Alertas desativados."
     
-    locais = [".", ".streamlit"]
-    arquivos_json = []
-    for local in locais:
-        if os.path.exists(local):
-            arquivos_json.extend([os.path.join(local, f) for f in os.listdir(local) if f.endswith(".json")])
-    
-    if arquivos_json:
-        gc = gspread.service_account(filename=arquivos_json[0])
-        return gc.open_by_key(SPREADSHEET_ID)
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = EMAIL_CONFIG["remetente"]
+        msg["To"] = EMAIL_CONFIG["destinatario"]
+        msg["Subject"] = f"[ALERTA DE ESTOQUE] Nivel Critico: {item} ({tamanho})"
         
-    raise FileNotFoundError("Credenciais nao encontradas.")
+        corpo = f"""
+Prezados,
 
-# Exportacao para Excel em memoria
-def gerar_relatorio_excel(df_est, df_mov):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df_est.to_excel(writer, sheet_name="Estoque Atual", index=False)
-        df_mov.to_excel(writer, sheet_name="Movimentações", index=False)
-    return output.getvalue()
+Este e um aviso automatico de necessidade de reposicao de estoque.
+
+Item: {item}
+Tamanho: {tamanho}
+Saldo Apos Movimentacao: {saldo_final} unidade(s)
+Estoque Minimo Definido: {minimo_configurado} unidade(s)
+
+Recomenda-se providenciar pedido de compra ou transferencia para este item.
+
+Sistema de Gestao de Uniformes - Defendi Engenharia
+        """
+        msg.attach(MIMEText(corpo, "plain"))
+        
+        with smtplib.SMTP(EMAIL_CONFIG["servidor_smtp"], EMAIL_CONFIG["porta_smtp"]) as server:
+            server.starttls()
+            server.login(EMAIL_CONFIG["remetente"], EMAIL_CONFIG["senha_app"])
+            server.sendmail(EMAIL_CONFIG["remetente"], [EMAIL_CONFIG["destinatario"]], msg.as_string())
+        return True, "Email enviado com sucesso."
+    except Exception as erro:
+        return False, str(erro)
+
+# Identifica os nomes reais das abas no Excel (com ou sem acento)
+def obter_nomes_abas(xl_file):
+    folhas = xl_file.sheet_names
+    aba_est = "Estoque Atual" if "Estoque Atual" in folhas else folhas[0]
+    aba_mov = "Movimentações" if "Movimentações" in folhas else ("Movimentacoes" if "Movimentacoes" in folhas else folhas[1])
+    aba_km = "Controle de KM" if "Controle de KM" in folhas else folhas[2]
+    return aba_est, aba_mov, aba_km
+
+# Leitura segura dos dados diretamente do disco
+def carregar_dados():
+    if not os.path.exists(CAMINHO_EXCEL):
+        st.error(f"Arquivo nao encontrado: {CAMINHO_EXCEL}")
+        st.stop()
+        
+    xl = pd.ExcelFile(CAMINHO_EXCEL)
+    aba_est, aba_mov, aba_km = obter_nomes_abas(xl)
+    
+    df_est = pd.read_excel(xl, sheet_name=aba_est)
+    df_m = pd.read_excel(xl, sheet_name=aba_mov)
+    df_k = pd.read_excel(xl, sheet_name=aba_km)
+    return df_est, df_m, df_k
+
+# Gravacao segura de nova movimentacao de uniforme sem perder dados anteriores
+def gravar_movimentacao_segura(nova_linha):
+    xl = pd.ExcelFile(CAMINHO_EXCEL)
+    aba_est, aba_mov, aba_km = obter_nomes_abas(xl)
+    
+    # Carrega historico real do disco
+    df_est = pd.read_excel(xl, sheet_name=aba_est)
+    df_m_existente = pd.read_excel(xl, sheet_name=aba_mov)
+    df_k_existente = pd.read_excel(xl, sheet_name=aba_km)
+    
+    # Anexa a nova movimentacao no final do historico
+    df_m_atualizado = pd.concat([df_m_existente, pd.DataFrame([nova_linha])], ignore_index=True)
+    
+    # Garante a presenca da coluna ESTOQUE MINIMO
+    if "ESTOQUE MÍNIMO" not in df_est.columns and "ESTOQUE MINIMO" not in df_est.columns:
+        df_est["ESTOQUE MÍNIMO"] = 2
+        
+    col_mov = "MOVIMENTO (ENTRADA/SAÍDA)" if "MOVIMENTO (ENTRADA/SAÍDA)" in df_m_atualizado.columns else df_m_atualizado.columns[1]
+
+    # Recalcula entradas e saidas mantendo o ESTOQUE INICIAL digitado no inventario
+    for idx, row in df_est.iterrows():
+        item = row["ITEM"]
+        tam = row["TAMANHO"]
+        
+        filtro = (df_m_atualizado["ITEM"] == item) & (df_m_atualizado["TAMANHO"] == tam)
+        ent = df_m_atualizado[filtro & (df_m_atualizado[col_mov].astype(str).str.upper().str.contains("ENTRADA"))]["QUANTIDADE"].sum()
+        sai = df_m_atualizado[filtro & (df_m_atualizado[col_mov].astype(str).str.upper().str.contains("SAÍDA|SAIDA"))]["QUANTIDADE"].sum()
+        
+        ini = row.get("ESTOQUE INICIAL", 0)
+        try:
+            ini = float(ini) if pd.notnull(ini) else 0.0
+        except:
+            ini = 0.0
+            
+        df_est.at[idx, "ENTRADAS"] = int(ent)
+        df_est.at[idx, "SAÍDAS"] = int(sai)
+        df_est.at[idx, "ESTOQUE ATUAL"] = int(ini + ent - sai)
+
+    # Grava todas as abas preservadas de volta no arquivo
+    with pd.ExcelWriter(CAMINHO_EXCEL, engine="openpyxl") as writer:
+        df_est.to_excel(writer, sheet_name=aba_est, index=False)
+        df_m_atualizado.to_excel(writer, sheet_name=aba_mov, index=False)
+        df_k_existente.to_excel(writer, sheet_name=aba_km, index=False)
+
+# Gravacao segura de nova viagem sem mexer nos uniformes
+def gravar_viagem_segura(nova_linha_km):
+    xl = pd.ExcelFile(CAMINHO_EXCEL)
+    aba_est, aba_mov, aba_km = obter_nomes_abas(xl)
+    
+    df_est_existente = pd.read_excel(xl, sheet_name=aba_est)
+    df_m_existente = pd.read_excel(xl, sheet_name=aba_mov)
+    df_k_existente = pd.read_excel(xl, sheet_name=aba_km)
+    
+    df_k_atualizado = pd.concat([df_k_existente, pd.DataFrame([nova_linha_km])], ignore_index=True)
+    
+    with pd.ExcelWriter(CAMINHO_EXCEL, engine="openpyxl") as writer:
+        df_est_existente.to_excel(writer, sheet_name=aba_est, index=False)
+        df_m_existente.to_excel(writer, sheet_name=aba_mov, index=False)
+        df_k_atualizado.to_excel(writer, sheet_name=aba_km, index=False)
 
 try:
-    planilha = conectar_google()
-    
-    aba_estoque = planilha.worksheet("Estoque Atual")
-    df_estoque = pd.DataFrame(aba_estoque.get_all_records())
-    
-    aba_mov = planilha.worksheet("Movimentações")
-    df_mov_historico = pd.DataFrame(aba_mov.get_all_records())
+    df_estoque, df_mov, df_km = carregar_dados()
 except Exception as e:
-    st.error(f"Falha de conexão com a base de dados: {e}")
+    st.error(f"Falha ao abrir a planilha: {e}")
     st.stop()
 
-# --- CARTOES DE INDICADORES (KPIs) ---
-if not df_estoque.empty:
-    col_estoque_atual = pd.to_numeric(df_estoque.get("ESTOQUE ATUAL", 0), errors="coerce").fillna(0)
-    col_entradas = pd.to_numeric(df_estoque.get("ENTRADAS", 0), errors="coerce").fillna(0)
-    col_saidas = pd.to_numeric(df_estoque.get("SAÍDAS", 0), errors="coerce").fillna(0)
+# --- MENU LATERAL DE NAVEGACAO ---
+st.sidebar.markdown("## NAVEGACAO")
+modulo_selecionado = st.sidebar.radio(
+    "Selecione o Modulo:",
+    ["Uniformes e EPIs", "Controle de KM"],
+    label_visibility="collapsed"
+)
+
+# ==============================================================================
+# MODULO 1: UNIFORMES E EPIS
+# ==============================================================================
+if modulo_selecionado == "Uniformes e EPIs":
+    st.markdown("""
+    <div class="header-bar">
+        <div class="header-title">CONTROLE DE ESTOQUE DE UNIFORMES E EPIS</div>
+        <div class="header-subtitle">Gestao Integrada com Arquivo Oficial no OneDrive</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Tratamento seguro para colunas numericas e estoque minimo
+    if "ESTOQUE MÍNIMO" in df_estoque.columns:
+        col_minimo = pd.to_numeric(df_estoque["ESTOQUE MÍNIMO"], errors="coerce").fillna(2)
+    elif "ESTOQUE MINIMO" in df_estoque.columns:
+        col_minimo = pd.to_numeric(df_estoque["ESTOQUE MINIMO"], errors="coerce").fillna(2)
+    else:
+        col_minimo = pd.Series([2] * len(df_estoque))
+        df_estoque["ESTOQUE MÍNIMO"] = 2
+
+    col_estoque_atual = pd.to_numeric(df_estoque["ESTOQUE ATUAL"], errors="coerce").fillna(0) if "ESTOQUE ATUAL" in df_estoque.columns else pd.Series([0] * len(df_estoque))
+    col_entradas = pd.to_numeric(df_estoque["ENTRADAS"], errors="coerce").fillna(0) if "ENTRADAS" in df_estoque.columns else pd.Series([0] * len(df_estoque))
+    col_saidas = pd.to_numeric(df_estoque["SAÍDAS"], errors="coerce").fillna(0) if "SAÍDAS" in df_estoque.columns else pd.Series([0] * len(df_estoque))
     
     total_pecas = int(col_estoque_atual.sum())
     total_entradas_acum = int(col_entradas.sum())
     total_saidas_acum = int(col_saidas.sum())
-    itens_zerados = int((col_estoque_atual <= 0).sum())
+    itens_criticos = int((col_estoque_atual <= col_minimo).sum())
 
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    with kpi1:
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
         st.markdown(f"""
         <div class="kpi-card">
-            <div class="kpi-label">Saldo em Estoque</div>
-            <div class="kpi-value">{total_pecas} <span style="font-size:14px; font-weight:400; color:#94A3B8;">peças</span></div>
+            <div class="kpi-label">Saldo Total</div>
+            <div class="kpi-value">{total_pecas} <span style="font-size:14px; font-weight:400; color:#94A3B8;">pecas</span></div>
         </div>
         """, unsafe_allow_html=True)
-    with kpi2:
+    with k2:
         st.markdown(f"""
         <div class="kpi-card">
             <div class="kpi-label">Total de Entradas</div>
-            <div class="kpi-value">{total_entradas_acum} <span style="font-size:14px; font-weight:400; color:#94A3B8;">peças</span></div>
+            <div class="kpi-value">{total_entradas_acum} <span style="font-size:14px; font-weight:400; color:#94A3B8;">pecas</span></div>
         </div>
         """, unsafe_allow_html=True)
-    with kpi3:
+    with k3:
         st.markdown(f"""
         <div class="kpi-card">
-            <div class="kpi-label">Total de Saídas</div>
-            <div class="kpi-value">{total_saidas_acum} <span style="font-size:14px; font-weight:400; color:#94A3B8;">peças</span></div>
+            <div class="kpi-label">Total de Saidas</div>
+            <div class="kpi-value">{total_saidas_acum} <span style="font-size:14px; font-weight:400; color:#94A3B8;">pecas</span></div>
         </div>
         """, unsafe_allow_html=True)
-    with kpi4:
+    with k4:
         st.markdown(f"""
         <div class="kpi-card-alert">
-            <div class="kpi-label">Itens com Saldo Zero</div>
-            <div class="kpi-value-alert">{itens_zerados} <span style="font-size:14px; font-weight:400; color:#94A3B8;">itens</span></div>
+            <div class="kpi-label">Itens no Limite / Zerados</div>
+            <div class="kpi-value-alert">{itens_criticos} <span style="font-size:14px; font-weight:400; color:#94A3B8;">itens</span></div>
         </div>
         """, unsafe_allow_html=True)
 
-st.write("") # Espacamento
+    st.write("")
 
-# --- ESTRUTURA PRINCIPAL ---
-col_tabela, col_formulario = st.columns([3, 2], gap="large")
+    col_tabela, col_form = st.columns([3, 2], gap="large")
 
-# COLUNA 1: CONSULTA DE ESTOQUE E EXPORTACAO
-with col_tabela:
-    st.subheader("Posição Atual de Estoque")
+    with col_tabela:
+        st.subheader("Posicao Atual de Estoque")
+        busca = st.text_input("Filtrar item:", placeholder="Digite para filtrar...", label_visibility="collapsed")
+
+        df_exibir = df_estoque
+        if busca and not df_estoque.empty:
+            df_exibir = df_estoque[
+                df_estoque["ITEM"].astype(str).str.contains(busca, case=False, na=False) |
+                df_estoque["TAMANHO"].astype(str).str.contains(busca, case=False, na=False)
+            ]
+
+        st.dataframe(df_exibir, use_container_width=True, hide_index=True)
+
+    with col_form:
+        st.subheader("Registrar Movimentacao")
+        lista_itens = sorted(df_estoque["ITEM"].dropna().unique().tolist()) if not df_estoque.empty else []
+        
+        with st.form("form_uniforme", clear_on_submit=True):
+            data_mov = st.date_input("Data da Operacao", value=date.today())
+            tipo_mov = st.radio("Tipo de Movimento", ["SAÍDA", "ENTRADA"], horizontal=True)
+            item_sel = st.selectbox("Item", lista_itens)
+            tam_sel = st.selectbox("Tamanho", ["P", "M", "G", "GG", "XG", "XXG", "EG", "EGG", "EXG", "EXGG", "G1"])
+            qtd = st.number_input("Quantidade", min_value=1, step=1, value=1)
+            resp = st.text_input("Responsavel", placeholder="Nome de quem retirou ou entregou")
+            obra = st.text_input("Obra ou Destino", placeholder="Identificacao da obra")
+            
+            btn_salvar = st.form_submit_button("Confirmar Movimentacao", use_container_width=True)
+            
+            if btn_salvar:
+                if not resp.strip():
+                    st.warning("Preencha o campo Responsavel.")
+                elif not obra.strip():
+                    st.warning("Preencha o campo Obra.")
+                else:
+                    # Identifica saldo atual e estoque minimo do item antes de salvar
+                    filtro_item_atual = (df_estoque["ITEM"] == item_sel) & (df_estoque["TAMANHO"] == tam_sel)
+                    saldo_atual_item = int(df_estoque.loc[filtro_item_atual, "ESTOQUE ATUAL"].values[0]) if (not df_estoque[filtro_item_atual].empty and "ESTOQUE ATUAL" in df_estoque.columns) else 0
+                    
+                    col_ref_min = "ESTOQUE MÍNIMO" if "ESTOQUE MÍNIMO" in df_estoque.columns else ("ESTOQUE MINIMO" if "ESTOQUE MINIMO" in df_estoque.columns else None)
+                    minimo_item = int(df_estoque.loc[filtro_item_atual, col_ref_min].values[0]) if (col_ref_min and not df_estoque[filtro_item_atual].empty) else 2
+
+                    nova_mov = {
+                        "DATA": data_mov.strftime("%d/%m/%Y"),
+                        "MOVIMENTO (ENTRADA/SAÍDA)": tipo_mov,
+                        "ITEM": item_sel,
+                        "TAMANHO": tam_sel,
+                        "QUANTIDADE": int(qtd),
+                        "RESPONSÁVEL": resp.strip(),
+                        "OBRA": obra.strip()
+                    }
+
+                    # Grava diretamente no arquivo do disco de forma acumulativa
+                    gravar_movimentacao_segura(nova_mov)
+                    st.success(f"{tipo_mov} registrada com sucesso no historico!")
+
+                    # Verificacao de alerta de estoque para saidas
+                    if tipo_mov == "SAÍDA":
+                        saldo_restante = saldo_atual_item - int(qtd)
+                        if saldo_restante <= minimo_item:
+                            st.warning(f"Atencao: Saldo restante ({saldo_restante} un.) atingiu o estoque minimo ({minimo_item} un.).")
+                            enviou, msg_envio = disparar_email_reposicao(item_sel, tam_sel, saldo_restante, minimo_item)
+                            if enviou:
+                                st.info("Alerta de reposicao enviado por e-mail com sucesso.")
+                            else:
+                                st.caption(f"Status do e-mail: {msg_envio}")
+
+                    st.rerun()
+
+# ==============================================================================
+# MODULO 2: CONTROLE DE KM
+# ==============================================================================
+elif modulo_selecionado == "Controle de KM":
+    st.markdown("""
+    <div class="header-bar">
+        <div class="header-title">CONTROLE DE QUILOMETRAGEM E FROTAS</div>
+        <div class="header-subtitle">Registro de Viagens Salvo no Arquivo do OneDrive</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    km_percorrido_col = pd.to_numeric(df_km.get("KM PERCORRIDO", 0), errors="coerce").fillna(0)
+    abastecimento_col = pd.to_numeric(df_km.get("VALOR ABASTECIMENTO (R$)", 0), errors="coerce").fillna(0)
     
-    col_busca, col_botao_export = st.columns([2, 1])
-    with col_busca:
-        busca = st.text_input("Filtrar por item ou tamanho:", placeholder="Digite para filtrar...", label_visibility="collapsed")
-    with col_botao_export:
-        arquivo_excel = gerar_relatorio_excel(df_estoque, df_mov_historico)
-        st.download_button(
-            label="Exportar para Excel",
-            data=arquivo_excel,
-            file_name=f"relatorio_estoque_{date.today().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+    total_km = int(km_percorrido_col.sum())
+    total_viagens = len(df_km)
+    total_abast = float(abastecimento_col.sum())
+    media_km = int(total_km / total_viagens) if total_viagens > 0 else 0
 
-    if busca and not df_estoque.empty:
-        df_exibicao = df_estoque[
-            df_estoque["ITEM"].astype(str).str.contains(busca, case=False, na=False) |
-            df_estoque["TAMANHO"].astype(str).str.contains(busca, case=False, na=False)
-        ]
-    else:
-        df_exibicao = df_estoque
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        st.markdown(f"""
+        <div class="kpi-card">
+            <div class="kpi-label">Total Percorrido</div>
+            <div class="kpi-value">{total_km} <span style="font-size:14px; font-weight:400; color:#94A3B8;">km</span></div>
+        </div>
+        """, unsafe_allow_html=True)
+    with k2:
+        st.markdown(f"""
+        <div class="kpi-card">
+            <div class="kpi-label">Viagens Registradas</div>
+            <div class="kpi-value">{total_viagens} <span style="font-size:14px; font-weight:400; color:#94A3B8;">registros</span></div>
+        </div>
+        """, unsafe_allow_html=True)
+    with k3:
+        st.markdown(f"""
+        <div class="kpi-card">
+            <div class="kpi-label">Custo Abastecimento</div>
+            <div class="kpi-value">R$ {total_abast:.2f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with k4:
+        st.markdown(f"""
+        <div class="kpi-card">
+            <div class="kpi-label">Media por Viagem</div>
+            <div class="kpi-value">{media_km} <span style="font-size:14px; font-weight:400; color:#94A3B8;">km/viagem</span></div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    st.dataframe(
-        df_exibicao,
-        use_container_width=True,
-        hide_index=True
-    )
+    st.write("")
 
-# COLUNA 2: FORMULARIO DE REGISTRO
-with col_formulario:
-    st.subheader("Registrar Movimentação")
-    
-    lista_itens = sorted(df_estoque["ITEM"].dropna().unique().tolist()) if not df_estoque.empty else []
-    
-    with st.form("form_registro", clear_on_submit=True):
-        data_mov = st.date_input("Data da Operação", value=date.today())
+    col_tabela_km, col_form_km = st.columns([3, 2], gap="large")
+
+    with col_tabela_km:
+        st.subheader("Historico de Deslocamentos")
+        busca_km = st.text_input("Filtrar viagens:", placeholder="Digite para filtrar...", label_visibility="collapsed")
+
+        df_exibir_km = df_km
+        if busca_km and not df_km.empty:
+            df_exibir_km = df_km[
+                df_km["VEÍCULO"].astype(str).str.contains(busca_km, case=False, na=False) |
+                df_km["MOTORISTA"].astype(str).str.contains(busca_km, case=False, na=False) |
+                df_km["OBRA"].astype(str).str.contains(busca_km, case=False, na=False)
+            ]
+
+        st.dataframe(df_exibir_km, use_container_width=True, hide_index=True)
+
+    with col_form_km:
+        st.subheader("Registrar Nova Viagem")
         
-        tipo_mov = st.radio(
-            "Tipo de Movimento",
-            ["SAÍDA", "ENTRADA"],
-            horizontal=True
-        )
-        
-        item_selecionado = st.selectbox("Item", lista_itens)
-        tamanho_selecionado = st.selectbox("Tamanho", ["P", "M", "G", "GG", "XG", "XXG", "EG", "EXG", "G1"])
-        quantidade = st.number_input("Quantidade", min_value=1, step=1, value=1)
-        
-        responsavel = st.text_input("Responsável", placeholder="Nome de quem retirou ou entregou")
-        obra = st.text_input("Obra ou Destino", placeholder="Identificação da obra")
-        
-        btn_gravar = st.form_submit_button("Confirmar Movimentação", use_container_width=True)
-        
-        if btn_gravar:
-            if not responsavel.strip():
-                st.warning("Preencha o campo Responsável.")
-            elif not obra.strip():
-                st.warning("Preencha o campo Obra.")
-            else:
-                with st.spinner("Registrando dados..."):
-                    try:
-                        nova_linha = [
-                            data_mov.strftime("%d/%m/%Y"),
-                            tipo_mov,
-                            item_selecionado,
-                            tamanho_selecionado,
-                            int(quantidade),
-                            responsavel.strip(),
-                            obra.strip()
-                        ]
-                        
-                        aba_mov.append_row(nova_linha, value_input_option="USER_ENTERED")
-                        st.success(f"{tipo_mov} registrada: {quantidade} unidade(s) de {item_selecionado} ({tamanho_selecionado}).")
-                        st.rerun()
-                    except Exception as erro:
-                        st.error(f"Nao foi possivel salvar: {erro}")
+        with st.form("form_km", clear_on_submit=True):
+            data_viagem = st.date_input("Data do Deslocamento", value=date.today())
+            veiculo = st.text_input("Veiculo e Placa", placeholder="Ex: Strada ABC-1234")
+            motorista = st.text_input("Motorista / Responsavel", placeholder="Ex: Carlos Silva")
+            destino_obra = st.text_input("Obra ou Destino", placeholder="Ex: Obra Central")
+            
+            c_kmi, c_kmf = st.columns(2)
+            with c_kmi:
+                km_inicial = st.number_input("KM Inicial", min_value=0, step=1, value=0)
+            with c_kmf:
+                km_final = st.number_input("KM Final", min_value=0, step=1, value=0)
+            
+            motivo_viagem = st.text_input("Motivo do Deslocamento", placeholder="Ex: Visita tecnica")
+            valor_abastecimento = st.number_input("Valor de Abastecimento (R$)", min_value=0.0, step=10.0, value=0.0)
+            
+            btn_salvar_km = st.form_submit_button("Confirmar Viagem", use_container_width=True)
+            
+            if btn_salvar_km:
+                if not veiculo.strip():
+                    st.warning("Preencha o campo Veiculo.")
+                elif not motorista.strip():
+                    st.warning("Preencha o campo Motorista.")
+                elif not destino_obra.strip():
+                    st.warning("Preencha o campo Obra.")
+                elif km_final < km_inicial:
+                    st.warning("O KM Final nao pode ser menor que o KM Inicial.")
+                else:
+                    km_calculado = int(km_final - km_inicial)
+                    nova_viagem = {
+                        "DATA": data_viagem.strftime("%d/%m/%Y"),
+                        "VEÍCULO": veiculo.strip(),
+                        "MOTORISTA": motorista.strip(),
+                        "OBRA": destino_obra.strip(),
+                        "KM INICIAL": int(km_inicial),
+                        "KM FINAL": int(km_final),
+                        "KM PERCORRIDO": km_calculado,
+                        "MOTIVO": motivo_viagem.strip(),
+                        "VALOR ABASTECIMENTO (R$)": float(valor_abastecimento)
+                    }
+
+                    # Grava diretamente no arquivo do disco de forma acumulativa
+                    gravar_viagem_segura(nova_viagem)
+                    st.success(f"Viagem gravada com sucesso! Percorrido: {km_calculado} km.")
+                    st.rerun()
